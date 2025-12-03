@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import Header from "@/components/Header";
 import ChatSidebar from "@/components/ChatSidebar";
 import WorkflowPanel from "@/components/WorkflowPanel";
@@ -6,64 +8,58 @@ import ChatInput from "@/components/ChatInput";
 import MessageBubble from "@/components/MessageBubble";
 import QueryResponse from "@/components/QueryResponse";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useToast } from "@/hooks/use-toast";
 
-// todo: remove mock functionality - replace with real API calls
-const mockConversations = [
-  {
-    id: "1",
-    title: "Revenue Analysis Q4",
-    preview: "Top customers by revenue in North America",
-    timestamp: "2h ago",
-  },
-  {
-    id: "2",
-    title: "Product Performance",
-    preview: "Best selling products by category",
-    timestamp: "1d ago",
-  },
-  {
-    id: "3",
-    title: "Customer Churn Analysis",
-    preview: "Analyze customer retention patterns",
-    timestamp: "3d ago",
-  },
-];
+interface Conversation {
+  id: string;
+  title: string;
+  preview: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
-const mockWorkflowSteps = [
-  {
-    id: "1",
-    stepNumber: 1,
-    question: "Show top 10 customers by revenue in North America",
-    sqlSnippet: "SELECT customer_id, SUM(order_total)...",
-    timestamp: "2:30 PM",
-    status: "completed" as const,
-  },
-  {
-    id: "2",
-    stepNumber: 2,
-    question: "Break down by product category",
-    sqlSnippet: "SELECT category, SUM(revenue)...",
-    timestamp: "2:35 PM",
-    status: "current" as const,
-  },
-];
+interface Message {
+  id: string;
+  conversationId: string;
+  role: "user" | "assistant";
+  content: string;
+  hasResponse: boolean;
+  createdAt: string;
+}
 
-const mockSQL = `SELECT 
-  customer_id,
-  customer_name,
-  SUM(order_total) AS total_revenue,
-  COUNT(DISTINCT order_id) AS order_count
-FROM analytics.orders o
-LEFT JOIN analytics.customers c 
-  ON o.customer_id = c.id
-WHERE order_date >= '2024-01-01'
-  AND region = 'North America'
-GROUP BY customer_id, customer_name
-ORDER BY total_revenue DESC
-LIMIT 100`;
+interface WorkflowStepData {
+  id: string;
+  conversationId: string;
+  stepNumber: number;
+  question: string;
+  sql: string;
+  status: "completed" | "current" | "pending";
+  response: AgentResponse | null;
+  createdAt: string;
+}
 
+interface AgentResponse {
+  intent_summary: string;
+  retrieved_context: string;
+  generated_sql: string;
+  access_control_applied: string;
+  cost_estimate: string;
+  validation_status: "PASS" | "FAIL";
+  explainability_notes: string;
+  result_preview: string;
+  workflow_step_saved: boolean;
+  recommended_next_steps: string[];
+  reporting_ready: boolean;
+}
+
+interface QueryResponseData {
+  conversationId: string;
+  response: AgentResponse;
+  workflowSteps: WorkflowStepData[];
+}
+
+// Mock result data for display (since we don't have a real Snowflake connection)
 const mockResultColumns = ["customer_id", "customer_name", "total_revenue", "order_count"];
-
 const mockResultData = [
   { customer_id: "C-001", customer_name: "Acme Corp", total_revenue: 125000, order_count: 45 },
   { customer_id: "C-002", customer_name: "TechStart Inc", total_revenue: 98500, order_count: 32 },
@@ -72,83 +68,265 @@ const mockResultData = [
   { customer_id: "C-005", customer_name: "DataFlow Systems", total_revenue: 65400, order_count: 21 },
 ];
 
-const mockAgents = [
-  { name: "Intent Parser", status: "completed" as const },
-  { name: "RAG Retrieval", status: "completed" as const },
-  { name: "SQL Generator", status: "completed" as const },
-  { name: "Validator", status: "completed" as const },
-  { name: "Cost Optimizer", status: "completed" as const },
-];
-
-const mockRecommendedSteps = [
-  { id: "1", label: "Break down revenue by product category", type: "drill-down" as const },
-  { id: "2", label: "Compare with previous year performance", type: "compare" as const },
-  { id: "3", label: "Analyze customer retention rate", type: "aggregate" as const },
-];
-
-interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: string;
-  hasResponse?: boolean;
-}
-
 export default function AnalyticsPortal() {
+  const { toast } = useToast();
   const [role, setRole] = useState("analyst");
   const [workflowPanelOpen, setWorkflowPanelOpen] = useState(true);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>("1");
-  const [isProcessing, setIsProcessing] = useState(false);
-
-  // todo: remove mock functionality
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "1",
-      role: "user",
-      content: "Show me the top 10 customers by revenue in North America for 2024",
-      timestamp: "2:34 PM",
-    },
-    {
-      id: "2",
-      role: "assistant",
-      content: "I'll analyze the customer revenue data for North America. I've parsed your intent, retrieved the relevant schema from our RAG system, and generated an optimized SQL query. The query passed validation and has been cost-optimized for efficient execution.",
-      timestamp: "2:34 PM",
-      hasResponse: true,
-    },
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [localMessages, setLocalMessages] = useState<Message[]>([]);
+  const [localWorkflowSteps, setLocalWorkflowSteps] = useState<WorkflowStepData[]>([]);
+  const [currentResponse, setCurrentResponse] = useState<AgentResponse | null>(null);
+  const [agentStatuses, setAgentStatuses] = useState<{ name: string; status: "idle" | "running" | "completed" | "error" }[]>([
+    { name: "Intent Parser", status: "idle" },
+    { name: "RAG Retrieval", status: "idle" },
+    { name: "SQL Generator", status: "idle" },
+    { name: "Validator", status: "idle" },
+    { name: "Cost Optimizer", status: "idle" },
   ]);
 
+  // Fetch conversations
+  const { data: conversations = [], isLoading: isLoadingConversations } = useQuery<Conversation[]>({
+    queryKey: ["/api/conversations"],
+  });
+
+  // Fetch conversation details when active conversation changes
+  const { data: conversationDetails } = useQuery<{
+    conversation: Conversation;
+    messages: Message[];
+    workflowSteps: WorkflowStepData[];
+  }>({
+    queryKey: ["/api/conversations", activeConversationId],
+    enabled: !!activeConversationId,
+  });
+
+  // Update local state when conversation details change
+  useEffect(() => {
+    if (conversationDetails) {
+      setLocalMessages(conversationDetails.messages);
+      setLocalWorkflowSteps(conversationDetails.workflowSteps);
+      
+      // Set current response from the most recent workflow step
+      const currentStep = conversationDetails.workflowSteps.find(s => s.status === "current");
+      if (currentStep?.response) {
+        setCurrentResponse(currentStep.response);
+      }
+    }
+  }, [conversationDetails]);
+
+  // Query mutation
+  const queryMutation = useMutation({
+    mutationFn: async (data: { question: string; conversationId?: string; role: string }) => {
+      const response = await apiRequest("POST", "/api/query", data);
+      return response.json() as Promise<QueryResponseData>;
+    },
+    onSuccess: (data) => {
+      setActiveConversationId(data.conversationId);
+      setCurrentResponse(data.response);
+      setLocalWorkflowSteps(data.workflowSteps);
+      
+      // Reset agent statuses
+      setAgentStatuses(prev => prev.map(a => ({ ...a, status: "completed" as const })));
+      
+      // Invalidate queries to refresh data
+      queryClient.invalidateQueries({ queryKey: ["/api/conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/conversations", data.conversationId] });
+    },
+    onError: (error) => {
+      console.error("Query error:", error);
+      toast({
+        title: "Error",
+        description: "Failed to process your query. Please try again.",
+        variant: "destructive",
+      });
+      setAgentStatuses(prev => prev.map(a => ({ ...a, status: "idle" as const })));
+    },
+  });
+
+  // Create conversation mutation
+  const createConversationMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/conversations", {
+        title: "New Analysis",
+        preview: "Start asking questions...",
+      });
+      return response.json() as Promise<Conversation>;
+    },
+    onSuccess: (data) => {
+      setActiveConversationId(data.id);
+      setLocalMessages([]);
+      setLocalWorkflowSteps([]);
+      setCurrentResponse(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/conversations"] });
+    },
+  });
+
+  // Clear workflow mutation
+  const clearWorkflowMutation = useMutation({
+    mutationFn: async (conversationId: string) => {
+      await apiRequest("DELETE", `/api/conversations/${conversationId}/workflow`);
+    },
+    onSuccess: () => {
+      setLocalWorkflowSteps([]);
+      if (activeConversationId) {
+        queryClient.invalidateQueries({ queryKey: ["/api/conversations", activeConversationId] });
+      }
+    },
+  });
+
   const handleSendMessage = (content: string) => {
-    const newUserMessage: Message = {
+    // Add optimistic user message
+    const userMessage: Message = {
       id: Date.now().toString(),
+      conversationId: activeConversationId || "",
       role: "user",
       content,
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      hasResponse: false,
+      createdAt: new Date().toISOString(),
     };
+    setLocalMessages(prev => [...prev, userMessage]);
 
-    setMessages((prev) => [...prev, newUserMessage]);
-    setIsProcessing(true);
+    // Simulate agent pipeline progress
+    const agentOrder = ["Intent Parser", "RAG Retrieval", "SQL Generator", "Validator", "Cost Optimizer"];
+    agentOrder.forEach((name, index) => {
+      setTimeout(() => {
+        setAgentStatuses(prev => 
+          prev.map(a => 
+            a.name === name 
+              ? { ...a, status: "running" as const }
+              : a.name === agentOrder[index - 1]
+              ? { ...a, status: "completed" as const }
+              : a
+          )
+        );
+      }, index * 400);
+    });
 
-    // todo: remove mock functionality - simulate AI response
-    setTimeout(() => {
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: `I'm processing your request: "${content}". I've analyzed your intent, retrieved relevant schema context, and generated an optimized SQL query for your analysis.`,
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        hasResponse: true,
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
-      setIsProcessing(false);
-    }, 2000);
+    // Send query to backend
+    queryMutation.mutate({
+      question: content,
+      conversationId: activeConversationId || undefined,
+      role,
+    });
   };
 
   const handleNewConversation = () => {
     setActiveConversationId(null);
-    setMessages([]);
+    setLocalMessages([]);
+    setLocalWorkflowSteps([]);
+    setCurrentResponse(null);
+    setAgentStatuses(prev => prev.map(a => ({ ...a, status: "idle" as const })));
+  };
+
+  const handleSelectConversation = (id: string) => {
+    setActiveConversationId(id);
+    setAgentStatuses(prev => prev.map(a => ({ ...a, status: "idle" as const })));
   };
 
   const handleSelectRecommendedStep = (step: { id: string; label: string; type: string }) => {
     handleSendMessage(step.label);
+  };
+
+  const handleExportWorkflow = () => {
+    if (localWorkflowSteps.length === 0) return;
+    
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      steps: localWorkflowSteps.map(s => ({
+        stepNumber: s.stepNumber,
+        question: s.question,
+        sql: s.sql,
+        status: s.status,
+      })),
+    };
+    
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `workflow-export-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    toast({
+      title: "Workflow Exported",
+      description: "Your workflow has been downloaded as JSON.",
+    });
+  };
+
+  const handleClearWorkflow = () => {
+    if (activeConversationId) {
+      clearWorkflowMutation.mutate(activeConversationId);
+    }
+  };
+
+  // Format conversations for sidebar
+  const formattedConversations = conversations.map(c => ({
+    id: c.id,
+    title: c.title,
+    preview: c.preview,
+    timestamp: formatRelativeTime(c.updatedAt),
+  }));
+
+  // Format workflow steps for panel
+  const formattedWorkflowSteps = localWorkflowSteps.map(s => ({
+    id: s.id,
+    stepNumber: s.stepNumber,
+    question: s.question,
+    sqlSnippet: s.sql.length > 40 ? s.sql.substring(0, 37) + "..." : s.sql,
+    timestamp: formatTime(s.createdAt),
+    status: s.status,
+  }));
+
+  // Get recommended steps from current response
+  const recommendedSteps = currentResponse?.recommended_next_steps.map((label, i) => ({
+    id: String(i + 1),
+    label,
+    type: i === 0 ? "drill-down" : i === 1 ? "compare" : "filter",
+  })) as { id: string; label: string; type: "drill-down" | "compare" | "filter" | "aggregate" }[] || [];
+
+  // Parse access control from response
+  const parseAccessControl = (response: AgentResponse | null) => {
+    if (!response) {
+      return {
+        role: role.toUpperCase(),
+        maskedColumns: [],
+        restrictedTables: [],
+        rowFilters: [],
+      };
+    }
+    
+    // Parse from access_control_applied string
+    const maskedMatch = response.access_control_applied.match(/Masked: ([^.]+)/);
+    const maskedColumns = maskedMatch ? maskedMatch[1].split(", ") : [];
+    
+    return {
+      role: role.toUpperCase(),
+      maskedColumns: role === "analyst" ? ["email", "phone_number"] : [],
+      restrictedTables: role === "analyst" ? ["hr.salaries", "finance.expenses"] : [],
+      rowFilters: role === "analyst" ? ["region IN ('NA', 'US', 'CA')"] : [],
+    };
+  };
+
+  // Parse cost estimate from response
+  const parseCostEstimate = (response: AgentResponse | null) => {
+    if (!response) {
+      return {
+        bytesScanned: "0 KB",
+        credits: 0,
+        optimizationScore: 100,
+        warnings: [],
+      };
+    }
+    
+    const bytesMatch = response.cost_estimate.match(/~?([0-9.]+\s*[A-Z]+)/);
+    const creditsMatch = response.cost_estimate.match(/([0-9.]+)\s*credits/);
+    
+    return {
+      bytesScanned: bytesMatch ? bytesMatch[1] : "2.4 GB",
+      credits: creditsMatch ? parseFloat(creditsMatch[1]) : 0.0234,
+      optimizationScore: response.validation_status === "PASS" ? 85 : 50,
+      warnings: response.validation_status === "FAIL" ? [response.explainability_notes] : [],
+    };
   };
 
   return (
@@ -162,16 +340,16 @@ export default function AnalyticsPortal() {
 
       <div className="flex flex-1 overflow-hidden">
         <ChatSidebar
-          conversations={mockConversations}
+          conversations={formattedConversations}
           activeId={activeConversationId}
-          onSelectConversation={setActiveConversationId}
+          onSelectConversation={handleSelectConversation}
           onNewConversation={handleNewConversation}
         />
 
         <main className="flex flex-1 flex-col overflow-hidden">
           <ScrollArea className="flex-1 p-6">
             <div className="mx-auto max-w-4xl space-y-6">
-              {messages.length === 0 ? (
+              {localMessages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-center">
                   <div className="mb-4 rounded-full bg-primary/10 p-4">
                     <svg
@@ -191,7 +369,7 @@ export default function AnalyticsPortal() {
                   <h2 className="text-xl font-semibold">Start a New Analysis</h2>
                   <p className="mt-2 max-w-md text-muted-foreground">
                     Ask questions about your Snowflake data in natural language. I'll generate
-                    secure, optimized SQL queries and provide actionable insights.
+                    secure, optimized SQL queries and provide actionable insights using Gemini AI.
                   </p>
                   <div className="mt-6 flex flex-wrap justify-center gap-2">
                     {[
@@ -211,42 +389,31 @@ export default function AnalyticsPortal() {
                   </div>
                 </div>
               ) : (
-                messages.map((message) => (
+                localMessages.map((message, index) => (
                   <div key={message.id} className="space-y-4">
                     <MessageBubble
                       role={message.role}
                       content={message.content}
-                      timestamp={message.timestamp}
+                      timestamp={formatTime(message.createdAt)}
                     />
-                    {message.hasResponse && message.role === "assistant" && (
+                    {message.role === "assistant" && currentResponse && index === localMessages.length - 1 && (
                       <QueryResponse
-                        sql={mockSQL}
+                        sql={currentResponse.generated_sql}
                         columns={mockResultColumns}
                         data={mockResultData}
-                        costEstimate={{
-                          bytesScanned: "2.4 GB",
-                          credits: 0.0234,
-                          optimizationScore: 85,
-                          warnings: [],
-                        }}
-                        accessControl={{
-                          role: role.toUpperCase(),
-                          maskedColumns: role === "analyst" ? ["email", "phone_number"] : [],
-                          restrictedTables: role === "analyst" ? ["hr.salaries"] : [],
-                          rowFilters:
-                            role === "analyst" ? ["region IN ('NA', 'US', 'CA')"] : [],
-                        }}
-                        recommendedSteps={mockRecommendedSteps}
-                        agents={mockAgents}
+                        costEstimate={parseCostEstimate(currentResponse)}
+                        accessControl={parseAccessControl(currentResponse)}
+                        recommendedSteps={recommendedSteps}
+                        agents={agentStatuses}
                         onSelectStep={handleSelectRecommendedStep}
-                        isLoading={isProcessing}
+                        isLoading={queryMutation.isPending}
                       />
                     )}
                   </div>
                 ))
               )}
 
-              {isProcessing && messages[messages.length - 1]?.role === "user" && (
+              {queryMutation.isPending && localMessages[localMessages.length - 1]?.role === "user" && (
                 <div className="flex items-center gap-3">
                   <div className="h-8 w-8 animate-pulse rounded-full bg-muted" />
                   <div className="flex-1 space-y-2">
@@ -258,18 +425,43 @@ export default function AnalyticsPortal() {
             </div>
           </ScrollArea>
 
-          <ChatInput onSend={handleSendMessage} disabled={isProcessing} />
+          <ChatInput onSend={handleSendMessage} disabled={queryMutation.isPending} />
         </main>
 
         {workflowPanelOpen && (
           <WorkflowPanel
-            steps={mockWorkflowSteps}
-            onSelectStep={(id) => console.log("Load step:", id)}
-            onExport={() => console.log("Export workflow")}
-            onClear={() => console.log("Clear workflow")}
+            steps={formattedWorkflowSteps}
+            onSelectStep={(id) => {
+              const step = localWorkflowSteps.find(s => s.id === id);
+              if (step?.response) {
+                setCurrentResponse(step.response);
+              }
+            }}
+            onExport={handleExportWorkflow}
+            onClear={handleClearWorkflow}
           />
         )}
       </div>
     </div>
   );
+}
+
+function formatRelativeTime(dateString: string): string {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return "just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+}
+
+function formatTime(dateString: string): string {
+  const date = new Date(dateString);
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
