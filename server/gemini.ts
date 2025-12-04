@@ -285,14 +285,128 @@ Each step should be a natural language question the user could ask next.`;
   ];
 }
 
+export async function parseIntentWithSchema(question: string, schemaContext: string): Promise<ParsedIntent> {
+  const systemPrompt = `You are an intent parsing agent for a Snowflake analytics system.
+Parse the user's natural language question and extract structured intent.
+Return JSON with: metrics (what to measure), dimensions (grouping), filters, dateRange, aggregations, limit, sortBy.`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    config: {
+      systemInstruction: systemPrompt,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: {
+          metrics: { type: "array", items: { type: "string" } },
+          dimensions: { type: "array", items: { type: "string" } },
+          filters: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                column: { type: "string" },
+                operator: { type: "string" },
+                value: { type: "string" },
+              },
+              required: ["column", "operator", "value"],
+            },
+          },
+          dateRange: {
+            type: "object",
+            nullable: true,
+            properties: {
+              start: { type: "string" },
+              end: { type: "string" },
+            },
+          },
+          aggregations: { type: "array", items: { type: "string" } },
+          limit: { type: "number" },
+          sortBy: {
+            type: "object",
+            nullable: true,
+            properties: {
+              column: { type: "string" },
+              direction: { type: "string" },
+            },
+          },
+        },
+        required: ["metrics", "dimensions", "filters", "aggregations", "limit"],
+      },
+    },
+    contents: `${schemaContext}\n\nUser Question: ${question}`,
+  });
+
+  const rawJson = response.text;
+  if (rawJson) {
+    return JSON.parse(rawJson);
+  }
+  throw new Error("Failed to parse intent");
+}
+
+export async function generateSQLWithSchema(
+  question: string,
+  intent: ParsedIntent,
+  role: string,
+  schemaContext: string
+): Promise<SQLGenerationResult> {
+  const systemPrompt = `You are a SQL generation agent for Snowflake.
+Generate a safe, optimized SELECT-only SQL query based on the user's question and parsed intent.
+Rules:
+- Only SELECT statements allowed
+- Always add LIMIT if not specified (default 1000)
+- Use fully qualified table names (database.schema.table)
+- Apply partition filters on date columns when possible
+- Optimize joins
+- Never use DROP, DELETE, INSERT, UPDATE, ALTER
+
+Role-based restrictions for ${role}:
+- ANALYST: Can access tables, but email/phone columns are masked
+- DATA_ENGINEER: Full access to tables
+- ADMIN: Full access to all tables`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    config: {
+      systemInstruction: systemPrompt,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: {
+          sql: { type: "string" },
+          explanation: { type: "string" },
+          tablesUsed: { type: "array", items: { type: "string" } },
+          columnsUsed: { type: "array", items: { type: "string" } },
+        },
+        required: ["sql", "explanation", "tablesUsed", "columnsUsed"],
+      },
+    },
+    contents: `${schemaContext}\n\nUser Question: ${question}\n\nParsed Intent: ${JSON.stringify(intent)}\n\nUser Role: ${role}`,
+  });
+
+  const rawJson = response.text;
+  if (rawJson) {
+    return JSON.parse(rawJson);
+  }
+  throw new Error("Failed to generate SQL");
+}
+
 export async function processQuery(
   question: string,
   role: string
 ): Promise<AgentResponse> {
+  return processQueryWithSchema(question, role, SCHEMA_CONTEXT);
+}
+
+export async function processQueryWithSchema(
+  question: string,
+  role: string,
+  schemaContext: string
+): Promise<AgentResponse> {
   try {
-    const intent = await parseIntent(question);
+    const intent = await parseIntentWithSchema(question, schemaContext);
     
-    const sqlResult = await generateSQL(question, intent, role);
+    const sqlResult = await generateSQLWithSchema(question, intent, role, schemaContext);
     
     const validation = validateSQL(sqlResult.sql);
     
