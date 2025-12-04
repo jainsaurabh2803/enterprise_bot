@@ -35,7 +35,8 @@ const snowflakeCredentialsSchema = z.object({
 const tableSchemaCache = new Map<string, TableSchema[]>();
 
 function getSessionId(req: Request): string {
-  return req.session?.id || req.sessionID || "default";
+  const sessionId = req.sessionID || "default";
+  return sessionId;
 }
 
 export async function registerRoutes(

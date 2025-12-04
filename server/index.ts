@@ -7,6 +7,9 @@ import { createServer } from "http";
 const app = express();
 const httpServer = createServer(app);
 
+// Trust proxy for production (Replit load balancer)
+app.set("trust proxy", 1);
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
@@ -38,6 +41,7 @@ app.use(
       secure: process.env.NODE_ENV === "production",
       httpOnly: true,
       maxAge: 24 * 60 * 60 * 1000,
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     },
   })
 );
