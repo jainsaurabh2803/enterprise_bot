@@ -124,7 +124,8 @@ export async function getTables(sessionId: string): Promise<TableInfo[]> {
   }
 
   const { connection, session } = entry;
-  const { database, schema } = session.credentials;
+  const database = session.credentials.database.toUpperCase();
+  const schema = session.credentials.schema?.toUpperCase() || "";
 
   const tables: TableInfo[] = [];
 
@@ -196,11 +197,13 @@ export async function getTableSchema(
   }
 
   const { connection, session } = entry;
-  const { database, schema: defaultSchema } = session.credentials;
+  const database = session.credentials.database.toUpperCase();
+  const defaultSchema = session.credentials.schema?.toUpperCase() || "";
   
-  const schema = schemaName || defaultSchema;
+  const schema = schemaName?.toUpperCase() || defaultSchema;
+  const tableNameUpper = tableName.toUpperCase();
 
-  const describeSql = `DESCRIBE TABLE "${database}"."${schema}"."${tableName}"`;
+  const describeSql = `DESCRIBE TABLE "${database}"."${schema}"."${tableNameUpper}"`;
   const rows = await executeQuery<Record<string, unknown>>(connection, describeSql);
 
   const columns: ColumnInfo[] = rows.map((row) => ({
@@ -213,14 +216,14 @@ export async function getTableSchema(
 
   let sampleRows: Record<string, unknown>[] = [];
   try {
-    const sampleSql = `SELECT * FROM "${database}"."${schema}"."${tableName}" LIMIT 5`;
+    const sampleSql = `SELECT * FROM "${database}"."${schema}"."${tableNameUpper}" LIMIT 5`;
     sampleRows = await executeQuery<Record<string, unknown>>(connection, sampleSql);
   } catch (e) {
     console.error("Failed to fetch sample rows:", e);
   }
 
   return {
-    tableName,
+    tableName: tableNameUpper,
     database,
     schema,
     columns,
