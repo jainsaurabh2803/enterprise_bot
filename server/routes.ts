@@ -114,14 +114,17 @@ export async function registerRoutes(
   });
 
   const selectTablesSchema = z.object({
-    tableNames: z.array(z.string().min(1)).min(1, "At least one table must be selected"),
+    tables: z.array(z.object({
+      name: z.string().min(1),
+      schema: z.string().min(1),
+    })).min(1, "At least one table must be selected"),
   });
 
   app.post("/api/snowflake/select-tables", async (req, res) => {
     try {
       const sessionId = getSessionId(req);
       const validated = selectTablesSchema.parse(req.body);
-      const { tableNames } = validated;
+      const { tables } = validated;
 
       const session = getSession(sessionId);
       if (!session) {
@@ -129,16 +132,18 @@ export async function registerRoutes(
       }
 
       const schemas: TableSchema[] = [];
-      for (const tableName of tableNames) {
-        const schema = await getTableSchema(sessionId, tableName);
-        schemas.push(schema);
+      for (const table of tables) {
+        const tableSchema = await getTableSchema(sessionId, table.name, table.schema);
+        schemas.push(tableSchema);
       }
 
       tableSchemaCache.set(sessionId, schemas);
       
+      const selectedTableNames = tables.map(t => `${t.schema}.${t.name}`);
+      
       res.json({ 
         success: true, 
-        selectedTables: tableNames,
+        selectedTables: selectedTableNames,
         schemaContext: buildSchemaContext(schemas)
       });
     } catch (error) {

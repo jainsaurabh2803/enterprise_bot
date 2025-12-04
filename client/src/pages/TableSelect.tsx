@@ -51,10 +51,15 @@ interface SnowflakeSession {
   connected: boolean;
 }
 
+interface SelectedTable {
+  name: string;
+  schema: string;
+}
+
 export default function TableSelect() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const [selectedTables, setSelectedTables] = useState<string[]>([]);
+  const [selectedTables, setSelectedTables] = useState<SelectedTable[]>([]);
   const [expandedTable, setExpandedTable] = useState<string | null>(null);
   const [tableSchemas, setTableSchemas] = useState<Record<string, TableSchema>>({});
 
@@ -82,8 +87,8 @@ export default function TableSelect() {
   });
 
   const selectTablesMutation = useMutation({
-    mutationFn: async (tableNames: string[]) => {
-      const response = await apiRequest("POST", "/api/snowflake/select-tables", { tableNames });
+    mutationFn: async (tables: SelectedTable[]) => {
+      const response = await apiRequest("POST", "/api/snowflake/select-tables", { tables });
       return response.json();
     },
     onSuccess: () => {
@@ -91,6 +96,7 @@ export default function TableSelect() {
         title: "Tables Selected",
         description: `${selectedTables.length} table(s) ready for analysis`,
       });
+      queryClient.invalidateQueries({ queryKey: ["/api/snowflake/session"] });
       setLocation("/chat");
     },
     onError: (error: Error) => {
@@ -115,11 +121,16 @@ export default function TableSelect() {
     }
   };
 
-  const handleToggleTable = (tableName: string) => {
+  const getTableKey = (table: TableInfo) => `${table.schema}.${table.name}`;
+  
+  const isTableSelected = (table: TableInfo) => 
+    selectedTables.some(t => t.name === table.name && t.schema === table.schema);
+
+  const handleToggleTable = (table: TableInfo) => {
     setSelectedTables((prev) =>
-      prev.includes(tableName)
-        ? prev.filter((t) => t !== tableName)
-        : [...prev, tableName]
+      isTableSelected(table)
+        ? prev.filter((t) => !(t.name === table.name && t.schema === table.schema))
+        : [...prev, { name: table.name, schema: table.schema }]
     );
   };
 
@@ -240,18 +251,18 @@ export default function TableSelect() {
                 <div className="space-y-2">
                   {tables.map((table) => (
                     <div
-                      key={table.name}
+                      key={getTableKey(table)}
                       className={`rounded-lg border transition-colors ${
-                        selectedTables.includes(table.name)
+                        isTableSelected(table)
                           ? "border-primary bg-primary/5"
                           : "border-border"
                       }`}
                     >
                       <div className="flex items-center gap-3 p-4">
                         <Checkbox
-                          checked={selectedTables.includes(table.name)}
-                          onCheckedChange={() => handleToggleTable(table.name)}
-                          data-testid={`checkbox-table-${table.name}`}
+                          checked={isTableSelected(table)}
+                          onCheckedChange={() => handleToggleTable(table)}
+                          data-testid={`checkbox-table-${getTableKey(table)}`}
                         />
                         <div className="flex-1">
                           <div className="flex items-center gap-2">

@@ -126,25 +126,79 @@ export async function getTables(sessionId: string): Promise<TableInfo[]> {
   const { connection, session } = entry;
   const { database, schema } = session.credentials;
 
-  const sql = `SHOW TABLES IN SCHEMA "${database}"."${schema}"`;
-  const rows = await executeQuery<Record<string, unknown>>(connection, sql);
+  const tables: TableInfo[] = [];
 
-  return rows.map((row) => ({
-    name: String(row.name || row.TABLE_NAME || ""),
-    schema: String(row.schema_name || row.TABLE_SCHEMA || schema),
-    database: String(row.database_name || row.TABLE_CATALOG || database),
-    rowCount: row.rows ? Number(row.rows) : undefined,
-  }));
+  if (schema && schema.trim() !== "") {
+    try {
+      const sql = `SHOW TABLES IN SCHEMA "${database}"."${schema}"`;
+      const rows = await executeQuery<Record<string, unknown>>(connection, sql);
+      
+      rows.forEach((row) => {
+        tables.push({
+          name: String(row.name || row.TABLE_NAME || ""),
+          schema: String(row.schema_name || row.TABLE_SCHEMA || schema),
+          database: String(row.database_name || row.TABLE_CATALOG || database),
+          rowCount: row.rows ? Number(row.rows) : undefined,
+        });
+      });
+      
+      if (tables.length > 0) {
+        return tables;
+      }
+    } catch (err) {
+      console.log(`Schema "${schema}" not found or empty, falling back to database-level search`);
+    }
+  }
+
+  try {
+    const schemasSql = `SHOW SCHEMAS IN DATABASE "${database}"`;
+    const schemasRows = await executeQuery<Record<string, unknown>>(connection, schemasSql);
+    
+    for (const schemaRow of schemasRows) {
+      const schemaName = String(schemaRow.name || schemaRow.SCHEMA_NAME || "");
+      
+      if (schemaName.toUpperCase() === "INFORMATION_SCHEMA") {
+        continue;
+      }
+      
+      try {
+        const tablesSql = `SHOW TABLES IN SCHEMA "${database}"."${schemaName}"`;
+        const tablesRows = await executeQuery<Record<string, unknown>>(connection, tablesSql);
+        
+        tablesRows.forEach((row) => {
+          tables.push({
+            name: String(row.name || row.TABLE_NAME || ""),
+            schema: schemaName,
+            database: String(row.database_name || row.TABLE_CATALOG || database),
+            rowCount: row.rows ? Number(row.rows) : undefined,
+          });
+        });
+      } catch (tableErr) {
+        console.log(`Could not list tables in schema "${schemaName}":`, tableErr);
+      }
+    }
+  } catch (dbErr) {
+    console.error("Failed to list schemas in database:", dbErr);
+    throw new Error(`Could not list schemas in database "${database}". Please check your permissions.`);
+  }
+
+  return tables;
 }
 
-export async function getTableSchema(sessionId: string, tableName: string): Promise<TableSchema> {
+export async function getTableSchema(
+  sessionId: string, 
+  tableName: string,
+  schemaName?: string
+): Promise<TableSchema> {
   const entry = sessionStore.get(sessionId);
   if (!entry) {
     throw new Error("No active Snowflake session");
   }
 
   const { connection, session } = entry;
-  const { database, schema } = session.credentials;
+  const { database, schema: defaultSchema } = session.credentials;
+  
+  const schema = schemaName || defaultSchema;
 
   const describeSql = `DESCRIBE TABLE "${database}"."${schema}"."${tableName}"`;
   const rows = await executeQuery<Record<string, unknown>>(connection, describeSql);
