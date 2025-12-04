@@ -10,6 +10,22 @@ The system operates as a conversational interface where users ask questions abou
 
 Preferred communication style: Simple, everyday language.
 
+## Recent Changes
+
+### Snowflake Connection Flow (Latest)
+
+Added a complete Snowflake connection workflow with three main pages:
+
+1. **SnowflakeConnect** (`/`) - Login page for entering Snowflake credentials
+2. **TableSelect** (`/tables`) - Browse and select tables from connected database
+3. **AnalyticsPortal** (`/chat`) - Chat interface for querying selected tables
+
+Key features:
+- Session-based credential management (credentials never persisted to disk)
+- Dynamic schema context - Gemini AI uses actual table schemas from Snowflake
+- Protected routes - Chat requires both connection AND table selection
+- Real query execution - SQL runs on actual Snowflake database when connected
+
 ## System Architecture
 
 ### Frontend Architecture
@@ -26,7 +42,7 @@ Preferred communication style: Simple, everyday language.
 
 **State Management**: React Query (TanStack Query) handles server state, API requests, and caching. Local component state uses React hooks.
 
-**Routing**: Wouter provides lightweight client-side routing.
+**Routing**: Wouter provides lightweight client-side routing with protected routes for session management.
 
 **Type Safety**: Full TypeScript implementation with shared types between client and server.
 
@@ -34,15 +50,25 @@ Preferred communication style: Simple, everyday language.
 
 **Framework**: Express.js running on Node.js with TypeScript.
 
+**Session Management**: Express-session with in-memory store for development. Sessions track Snowflake connections and selected table schemas.
+
 **API Design**: RESTful API with endpoints for:
+- Snowflake connection management (connect, disconnect, session status)
+- Table metadata and schema retrieval
 - Conversation management (CRUD operations)
 - Message storage and retrieval
 - Workflow step tracking
 - Query processing through AI agent orchestration
 
+**Snowflake Integration**: Official `snowflake-sdk` package for Node.js provides:
+- Connection pooling and session management
+- Metadata queries (SHOW TABLES, DESCRIBE TABLE)
+- Query execution with results streaming
+- Secure credential handling (session-only, not persisted)
+
 **AI Integration**: Google Gemini AI (gemini-2.5-flash model) powers the multi-agent system. The architecture defines specialized agent responsibilities:
-1. Intent Parsing Agent - extracts query components
-2. RAG-Enhanced SQL Generation Agent - generates optimized SQL
+1. Intent Parsing Agent - extracts query components from natural language
+2. RAG-Enhanced SQL Generation Agent - generates optimized SQL using dynamic schema
 3. Access Control & Security Agent - enforces RBAC and data masking
 4. SQL Validation & Safety Agent - ensures query safety
 5. Cost Optimization Agent - estimates and optimizes query costs
@@ -50,11 +76,7 @@ Preferred communication style: Simple, everyday language.
 7. Workflow Manager & Memory Agent - maintains conversation history
 8. Workflow Graph & Recommendation Agent - suggests next steps
 
-This multi-agent approach provides separation of concerns, specialized expertise, and composable intelligence.
-
-**Session Management**: In-memory storage for development with a structured interface (`IStorage`) that abstracts the persistence layer, allowing easy migration to database-backed storage.
-
-**Development Server**: Vite dev server integration in development mode provides HMR (Hot Module Replacement) and optimized development workflow.
+The `processQueryWithSchema` function accepts dynamic schema context from selected Snowflake tables, enabling accurate SQL generation based on actual database structure.
 
 ### Data Architecture
 
@@ -68,9 +90,15 @@ This multi-agent approach provides separation of concerns, specialized expertise
 
 The schema uses UUIDs for primary keys and includes timestamps for audit trails. The workflow tracking system maintains full lineage of analytical steps for reproducibility and compliance.
 
-**ORM Choice**: Drizzle ORM provides type-safe database queries with minimal runtime overhead and excellent TypeScript integration. The schema is defined in TypeScript and can be pushed to the database using `drizzle-kit`.
+**ORM Choice**: Drizzle ORM provides type-safe database queries with minimal runtime overhead and excellent TypeScript integration.
 
 ### Security Architecture
+
+**Snowflake Credential Security**:
+- Credentials are stored only in session memory
+- Never persisted to disk or database
+- Session-based authentication per user
+- Automatic cleanup on disconnect
 
 **Role-Based Access Control (RBAC)**: The system simulates Snowflake RBAC with different user roles (ANALYST, DATA_ENGINEER, ADMIN) that determine:
 - Accessible tables and schemas
@@ -88,15 +116,13 @@ The schema uses UUIDs for primary keys and includes timestamps for audit trails.
 - Restricted access and justifications
 - Cost estimates and optimization suggestions
 
-This transparency ensures compliance with data governance requirements and builds user trust.
-
 ### Build and Deployment
 
 **Build Process**: Custom build script (`script/build.ts`) using:
 - Vite for client-side bundling
 - esbuild for server-side bundling with selective dependency bundling
 
-**Production Optimization**: The build process bundles frequently-used server dependencies to reduce cold start times by minimizing `openat(2)` syscalls. This is particularly important for serverless deployments.
+**Production Optimization**: The build process bundles frequently-used server dependencies to reduce cold start times.
 
 **Environment Configuration**: Environment variables control database connections, API keys, and runtime behavior.
 
@@ -114,34 +140,21 @@ Configuration requires `GEMINI_API_KEY` environment variable.
 
 ### Database Services
 
-**Neon Serverless PostgreSQL**: Cloud-native PostgreSQL via `@neondatabase/serverless` driver. Provides:
-- Serverless scaling
-- Connection pooling
-- Low latency
-- Compatibility with edge runtimes
+**Snowflake**: Enterprise data warehouse accessed via `snowflake-sdk`. Connection requires:
+- Account identifier
+- Username/password
+- Warehouse, database, schema selection
+- Optional role specification
 
-Connection configured via `DATABASE_URL` environment variable.
+**Neon Serverless PostgreSQL**: Cloud-native PostgreSQL via `@neondatabase/serverless` driver for application data.
 
-**Drizzle ORM**: Type-safe ORM with schema-first approach. The migration system (`drizzle-kit`) manages schema changes through the `db:push` command.
+**Drizzle ORM**: Type-safe ORM with schema-first approach.
 
 ### UI Component Libraries
 
-**Radix UI**: Headless, accessible component primitives for complex UI patterns (dialogs, dropdowns, tooltips, etc.). These components provide:
-- ARIA-compliant accessibility
-- Keyboard navigation
-- Focus management
-- Customizable styling
+**Radix UI**: Headless, accessible component primitives.
 
-**shadcn/ui**: Pre-styled components built on Radix UI primitives, customized for the application's design system.
-
-### Development Tools
-
-**Replit Integration**: Development environment plugins for:
-- Runtime error overlay
-- Cartographer (dependency visualization)
-- Development banner
-
-These are conditionally loaded only in development mode.
+**shadcn/ui**: Pre-styled components built on Radix UI primitives.
 
 ### Supporting Libraries
 
@@ -151,3 +164,4 @@ These are conditionally loaded only in development mode.
 - **wouter**: Lightweight routing
 - **date-fns**: Date manipulation and formatting
 - **Lucide React**: Icon library
+- **express-session**: Session management for Snowflake connections

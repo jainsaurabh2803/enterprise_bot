@@ -15,14 +15,30 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Database, Settings, LogOut, User, Moon, Sun, PanelRightOpen, PanelRightClose } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Database, Settings, LogOut, User, Moon, Sun, PanelRightOpen, PanelRightClose, Table } from "lucide-react";
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
+
+interface SnowflakeSession {
+  credentials: {
+    account: string;
+    username: string;
+    warehouse: string;
+    database: string;
+    schema: string;
+    role?: string;
+  };
+  connected: boolean;
+}
 
 interface HeaderProps {
   currentRole: string;
   onRoleChange: (role: string) => void;
   workflowPanelOpen: boolean;
   onToggleWorkflowPanel: () => void;
+  selectedTables?: string[];
 }
 
 const roles = [
@@ -36,12 +52,30 @@ export default function Header({
   onRoleChange,
   workflowPanelOpen,
   onToggleWorkflowPanel,
+  selectedTables = [],
 }: HeaderProps) {
   const [darkMode, setDarkMode] = useState(false);
+  const [, setLocation] = useLocation();
+
+  const { data: sessionData } = useQuery<{
+    connected: boolean;
+    session: SnowflakeSession | null;
+  }>({
+    queryKey: ["/api/snowflake/session"],
+  });
 
   const toggleDarkMode = () => {
     setDarkMode(!darkMode);
     document.documentElement.classList.toggle("dark");
+  };
+
+  const handleDisconnect = async () => {
+    await fetch("/api/snowflake/disconnect", { method: "POST" });
+    setLocation("/");
+  };
+
+  const handleChangeTables = () => {
+    setLocation("/tables");
   };
 
   return (
@@ -56,6 +90,27 @@ export default function Header({
             <p className="text-xs text-muted-foreground">Snowflake Intelligence</p>
           </div>
         </div>
+
+        {sessionData?.connected && sessionData.session && (
+          <div className="flex items-center gap-2 ml-4 pl-4 border-l border-border">
+            <Badge variant="outline" className="gap-1">
+              <Database className="h-3 w-3" />
+              {sessionData.session.credentials.database}.{sessionData.session.credentials.schema}
+            </Badge>
+            {selectedTables.length > 0 && (
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                className="gap-1 h-7" 
+                onClick={handleChangeTables}
+                data-testid="button-change-tables"
+              >
+                <Table className="h-3 w-3" />
+                {selectedTables.length} table(s)
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-3">
@@ -119,9 +174,9 @@ export default function Header({
               Settings
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem data-testid="menu-logout">
+            <DropdownMenuItem onClick={handleDisconnect} data-testid="menu-logout">
               <LogOut className="mr-2 h-4 w-4" />
-              Log out
+              Disconnect
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

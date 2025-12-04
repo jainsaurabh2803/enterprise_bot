@@ -154,7 +154,7 @@ export default function TableSelect() {
 
   if (!sessionData?.connected) {
     setLocation("/");
-    return null;
+    return <></>;
   }
 
   const session = sessionData.session;

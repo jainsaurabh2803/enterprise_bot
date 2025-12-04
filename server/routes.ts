@@ -76,7 +76,14 @@ export async function registerRoutes(
   app.get("/api/snowflake/session", async (req, res) => {
     const sessionId = getSessionId(req);
     const session = getSession(sessionId);
-    res.json({ connected: !!session, session });
+    const selectedSchemas = tableSchemaCache.get(sessionId) || [];
+    const selectedTables = selectedSchemas.map(s => s.tableName);
+    res.json({ 
+      connected: !!session, 
+      session,
+      selectedTables,
+      hasSelectedTables: selectedTables.length > 0
+    });
   });
 
   app.get("/api/snowflake/tables", async (req, res) => {
@@ -106,13 +113,19 @@ export async function registerRoutes(
     }
   });
 
+  const selectTablesSchema = z.object({
+    tableNames: z.array(z.string().min(1)).min(1, "At least one table must be selected"),
+  });
+
   app.post("/api/snowflake/select-tables", async (req, res) => {
     try {
       const sessionId = getSessionId(req);
-      const { tableNames } = req.body as { tableNames: string[] };
-      
-      if (!tableNames || tableNames.length === 0) {
-        return res.status(400).json({ error: "At least one table must be selected" });
+      const validated = selectTablesSchema.parse(req.body);
+      const { tableNames } = validated;
+
+      const session = getSession(sessionId);
+      if (!session) {
+        return res.status(401).json({ error: "No active Snowflake session" });
       }
 
       const schemas: TableSchema[] = [];
@@ -130,6 +143,9 @@ export async function registerRoutes(
       });
     } catch (error) {
       console.error("Error selecting tables:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: "Invalid table selection", details: error.errors });
+      }
       res.status(500).json({ 
         error: error instanceof Error ? error.message : "Failed to select tables" 
       });
@@ -234,6 +250,13 @@ export async function registerRoutes(
       const { question, conversationId, role } = validatedRequest;
 
       const tableSchemas = tableSchemaCache.get(sessionId) || [];
+      
+      if (tableSchemas.length === 0) {
+        return res.status(400).json({ 
+          error: "No tables selected. Please select at least one table to analyze." 
+        });
+      }
+      
       const schemaContext = buildSchemaContext(tableSchemas);
 
       let convoId = conversationId;

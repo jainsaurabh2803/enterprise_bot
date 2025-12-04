@@ -9,6 +9,7 @@ import MessageBubble from "@/components/MessageBubble";
 import QueryResponse from "@/components/QueryResponse";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
+import { useLocation } from "wouter";
 
 interface Conversation {
   id: string;
@@ -56,26 +57,35 @@ interface QueryResponseData {
   conversationId: string;
   response: AgentResponse;
   workflowSteps: WorkflowStepData[];
+  queryResults?: {
+    columns: string[];
+    data: Record<string, unknown>[];
+  } | null;
 }
 
-// Mock result data for display (since we don't have a real Snowflake connection)
-const mockResultColumns = ["customer_id", "customer_name", "total_revenue", "order_count"];
-const mockResultData = [
-  { customer_id: "C-001", customer_name: "Acme Corp", total_revenue: 125000, order_count: 45 },
-  { customer_id: "C-002", customer_name: "TechStart Inc", total_revenue: 98500, order_count: 32 },
-  { customer_id: "C-003", customer_name: "Global Dynamics", total_revenue: 87200, order_count: 28 },
-  { customer_id: "C-004", customer_name: "Innovate LLC", total_revenue: 76800, order_count: 24 },
-  { customer_id: "C-005", customer_name: "DataFlow Systems", total_revenue: 65400, order_count: 21 },
-];
+interface SnowflakeSession {
+  credentials: {
+    account: string;
+    username: string;
+    warehouse: string;
+    database: string;
+    schema: string;
+    role?: string;
+  };
+  connected: boolean;
+}
 
 export default function AnalyticsPortal() {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [role, setRole] = useState("analyst");
   const [workflowPanelOpen, setWorkflowPanelOpen] = useState(true);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [localMessages, setLocalMessages] = useState<Message[]>([]);
   const [localWorkflowSteps, setLocalWorkflowSteps] = useState<WorkflowStepData[]>([]);
   const [currentResponse, setCurrentResponse] = useState<AgentResponse | null>(null);
+  const [queryResults, setQueryResults] = useState<{ columns: string[]; data: Record<string, unknown>[] } | null>(null);
+  const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [agentStatuses, setAgentStatuses] = useState<{ name: string; status: "idle" | "running" | "completed" | "error" }[]>([
     { name: "Intent Parser", status: "idle" },
     { name: "RAG Retrieval", status: "idle" },
@@ -83,6 +93,23 @@ export default function AnalyticsPortal() {
     { name: "Validator", status: "idle" },
     { name: "Cost Optimizer", status: "idle" },
   ]);
+
+  const { data: sessionData } = useQuery<{
+    connected: boolean;
+    session: SnowflakeSession | null;
+    selectedTables: string[];
+    hasSelectedTables: boolean;
+  }>({
+    queryKey: ["/api/snowflake/session"],
+  });
+
+  useEffect(() => {
+    if (sessionData && !sessionData.connected) {
+      setLocation("/");
+    } else if (sessionData && sessionData.selectedTables) {
+      setSelectedTables(sessionData.selectedTables);
+    }
+  }, [sessionData, setLocation]);
 
   // Fetch conversations
   const { data: conversations = [], isLoading: isLoadingConversations } = useQuery<Conversation[]>({
@@ -123,6 +150,11 @@ export default function AnalyticsPortal() {
       setActiveConversationId(data.conversationId);
       setCurrentResponse(data.response);
       setLocalWorkflowSteps(data.workflowSteps);
+      
+      // Store query results if available
+      if (data.queryResults) {
+        setQueryResults(data.queryResults);
+      }
       
       // Reset agent statuses
       setAgentStatuses(prev => prev.map(a => ({ ...a, status: "completed" as const })));
@@ -329,6 +361,10 @@ export default function AnalyticsPortal() {
     };
   };
 
+  // Compute columns and data for display (use real results if available, otherwise show placeholder)
+  const displayColumns = queryResults?.columns || [];
+  const displayData = (queryResults?.data || []) as Record<string, string | number | null>[];
+
   return (
     <div className="flex h-screen flex-col bg-background">
       <Header
@@ -336,6 +372,7 @@ export default function AnalyticsPortal() {
         onRoleChange={setRole}
         workflowPanelOpen={workflowPanelOpen}
         onToggleWorkflowPanel={() => setWorkflowPanelOpen(!workflowPanelOpen)}
+        selectedTables={selectedTables}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -399,8 +436,8 @@ export default function AnalyticsPortal() {
                     {message.role === "assistant" && currentResponse && index === localMessages.length - 1 && (
                       <QueryResponse
                         sql={currentResponse.generated_sql}
-                        columns={mockResultColumns}
-                        data={mockResultData}
+                        columns={displayColumns}
+                        data={displayData}
                         costEstimate={parseCostEstimate(currentResponse)}
                         accessControl={parseAccessControl(currentResponse)}
                         recommendedSteps={recommendedSteps}
