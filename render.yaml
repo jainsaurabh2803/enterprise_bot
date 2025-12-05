@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: mcp-analytics-portal
+    runtime: node
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+    healthCheckPath: /api/snowflake/session
