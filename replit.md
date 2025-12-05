@@ -12,7 +12,21 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
-### Snowflake Connection Flow (Latest)
+### GitHub Deployment Support (Latest)
+
+Added complete deployment configuration for running the app outside Replit:
+- Dockerfile for containerized deployment
+- railway.json for Railway deployment
+- render.yaml for Render deployment  
+- DEPLOYMENT.md with comprehensive instructions
+- .env.example documenting all environment variables
+
+Required environment variables for deployment:
+- `SESSION_SECRET` - secure session encryption key
+- `GEMINI_API_KEY` - Google Gemini API key
+- `NODE_ENV=production` - enables production mode
+
+### Snowflake Connection Flow
 
 Added a complete Snowflake connection workflow with three main pages:
 
