@@ -19,7 +19,7 @@ Create a `.env` file based on `.env.example`:
 | `PORT` | No | Server port (default: 5000) |
 | `SESSION_SECRET` | Yes | A secure random string for session encryption |
 | `GEMINI_API_KEY` | Yes | Your Google Gemini API key |
-| `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `DATABASE_URL` | No | PostgreSQL connection string (only for persistent storage) |
 
 ## Deployment Options
 
@@ -148,13 +148,15 @@ your-domain.com {
 }
 ```
 
-## Database Setup
+## Database Setup (Optional)
 
-Run database migrations after setting up your PostgreSQL database:
+If using persistent storage with PostgreSQL, run database migrations:
 
 ```bash
 npm run db:push
 ```
+
+Note: The app works without a database using in-memory storage. Database is only needed for conversation history persistence.
 
 ## Security Considerations
 
